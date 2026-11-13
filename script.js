@@ -10,13 +10,16 @@ const state = {
   favOnly: false,
   sort: 'new',
   currentId: null,
-  pendingDeleteId: null
+  pendingDeleteId: null,
+  permanentDelete: false
 };
 
 const $ = (sel) => document.querySelector(sel);
 const els = {
   grid: $('#notesGrid'),
   empty: $('#emptyState'),
+  emptyStateTitle: $('#emptyStateTitle'),
+  emptyStateText: $('#emptyStateText'),
   folderSelect: $('#folderSelect'),
   search: $('#searchInput'),
   favOnly: $('#favOnly'),
@@ -25,6 +28,7 @@ const els = {
   statTotal: $('#statTotal'),
   statFolders: $('#statFolders'),
   statFav: $('#statFav'),
+  statTrash: $('#statTrash'),
   themeToggle: $('#themeToggle'),
   themeIcon: $('#themeIcon'),
   tpl: $('#noteCardTemplate'),
@@ -42,6 +46,7 @@ const els = {
   viewContent: $('#viewContent'),
   viewTags: $('#viewTags'),
   viewWordStats: $('#viewWordStats'),
+  viewPaneFooter: $('#viewPaneFooter'),
   copyContentBtn: $('#copyContentBtn'),
   viewFavBtn: $('#viewFavBtn'),
   viewEditBtn: $('#viewEditBtn'),
@@ -60,6 +65,8 @@ const els = {
   formCancelBtn: $('#formCancelBtn'),
 
   confirmEl: $('#confirmModal'),
+  confirmTitle: $('#confirmTitle'),
+  confirmSub: $('#confirmSub'),
   confirmDeleteBtn: $('#confirmDeleteBtn'),
   toastEl: $('#appToast'),
   toastBody: $('#toastBody')
@@ -110,6 +117,7 @@ function demoNotes() {
       content: '<b>Основні завдання для завершення:</b>\n- Реалізувати ієрархію папок\n- Перевірити швидкий пошук\n- Підготувати доповідь для викладача (Олександр Темнов)',
       tags: ['курсова', 'рфкіт', 'база-знань'],
       favorite: true,
+      deleted: false,
       createdAt: new Date(now - 86400000).toISOString(),
       updatedAt: new Date(now - 86400000).toISOString()
     },
@@ -121,6 +129,7 @@ function demoNotes() {
       content: '<code>LocalStorage API</code> використовується для збереження папок і нотаток без сервера.\nВикористовуємо <i>JSON.stringify()</i> та <i>JSON.parse()</i>.',
       tags: ['js', 'frontend', 'web'],
       favorite: false,
+      deleted: false,
       createdAt: new Date(now - 172800000).toISOString(),
       updatedAt: new Date(now - 172800000).toISOString()
     }
@@ -130,7 +139,9 @@ function demoNotes() {
 function loadNotes() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : demoNotes();
+    if (!raw) return demoNotes();
+    const parsed = JSON.parse(raw);
+    return parsed.map(n => ({ ...n, deleted: !!n.deleted }));
   } catch (e) {
     return demoNotes();
   }
@@ -158,23 +169,41 @@ function toggleTheme() {
 
 function getVisibleNotes() {
   const q = state.query.trim().toLowerCase();
+  const isTrash = state.folder === 'trash';
+
   return state.notes.filter(n => {
-    if (state.folder !== 'Усі' && !n.folder.startsWith(state.folder)) return false;
-    if (state.favOnly && !n.favorite) return false;
+    if (isTrash) {
+      if (!n.deleted) return false;
+    } else {
+      if (n.deleted) return false;
+      // Перевірка належності нотатки до папки або її підпапок
+      if (state.folder !== 'Усі' && !n.folder.startsWith(state.folder)) return false;
+      if (state.favOnly && !n.favorite) return false;
+    }
+
     if (!q) return true;
     const haystack = [n.title, n.content, n.folder, (n.tags || []).join(' ')].join(' ').toLowerCase();
     return q.split(/\s+/).every(w => haystack.includes(w));
-  }).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || new Date(b.createdAt) - new Date(a.createdAt));
+  }).sort((a, b) => {
+    if (state.sort === 'az') return a.title.localeCompare(b.title);
+    if (state.sort === 'old') return new Date(a.createdAt) - new Date(b.createdAt);
+    return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || new Date(b.createdAt) - new Date(a.createdAt);
+  });
 }
 
 function renderStats() {
-  els.statTotal.textContent = state.notes.length;
-  els.statFav.textContent = state.notes.filter(n => n.favorite).length;
-  els.statFolders.textContent = new Set(state.notes.map(n => n.folder)).size;
+  const activeNotes = state.notes.filter(n => !n.deleted);
+  const trashNotes = state.notes.filter(n => n.deleted);
+
+  els.statTotal.textContent = activeNotes.length;
+  els.statFav.textContent = activeNotes.filter(n => n.favorite).length;
+  els.statFolders.textContent = new Set(activeNotes.map(n => n.folder)).size;
+  els.statTrash.textContent = trashNotes.length;
 }
 
 function renderNotes() {
   const list = getVisibleNotes();
+  const isTrash = state.folder === 'trash';
   els.grid.innerHTML = '';
 
   list.forEach(note => {
@@ -183,7 +212,7 @@ function renderNotes() {
     card.dataset.id = note.id;
 
     node.querySelector('.js-folder').innerHTML = '<i class="bi bi-folder me-1"></i>' + escapeHtml(note.folder);
-    if (note.pinned) node.querySelector('.js-pinned').classList.remove('d-none');
+    if (note.pinned && !isTrash) node.querySelector('.js-pinned').classList.remove('d-none');
 
     node.querySelector('.js-title').innerHTML = highlight(note.title, state.query);
     node.querySelector('.js-date').textContent = formatDate(note.createdAt);
@@ -202,8 +231,28 @@ function renderNotes() {
     const fav = node.querySelector('.js-fav');
     fav.classList.toggle('text-warning', note.favorite);
 
+    const actionsBox = node.querySelector('.js-actions');
+    if (isTrash) {
+      actionsBox.innerHTML = `
+        <button type="button" class="btn btn-sm btn-outline-success flex-fill" data-action="restore">
+          <i class="bi bi-arrow-counterclockwise me-1"></i>Відновити
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-danger flex-fill" data-action="delete-perm">
+          <i class="bi bi-x-circle me-1"></i>Назавжди
+        </button>
+      `;
+    }
+
     els.grid.appendChild(node);
   });
+
+  if (isTrash) {
+    els.emptyStateTitle.textContent = 'Кошик порожній';
+    els.emptyStateText.textContent = 'Видалені нотатки будуть з\'являтися тут.';
+  } else {
+    els.emptyStateTitle.textContent = 'У цій папці немає нотаток';
+    els.emptyStateText.textContent = 'Створіть нову нотатку або змініть обрану папку.';
+  }
 
   els.empty.classList.toggle('d-none', list.length > 0);
   els.info.textContent = 'Знайдено нотаток: ' + list.length;
@@ -238,6 +287,7 @@ els.editorTools.addEventListener('click', (e) => {
 els.folderSelect.addEventListener('change', (e) => { state.folder = e.target.value; renderNotes(); });
 els.search.addEventListener('input', (e) => { state.query = e.target.value; renderNotes(); });
 els.favOnly.addEventListener('change', (e) => { state.favOnly = e.target.checked; renderNotes(); });
+els.sort.addEventListener('change', (e) => { state.sort = e.target.value; renderNotes(); });
 els.themeToggle.addEventListener('click', toggleTheme);
 
 $('#newNoteBtn').addEventListener('click', () => openForm());
@@ -257,7 +307,9 @@ els.grid.addEventListener('click', (e) => {
       saveNotes(); renderAll();
     }
     if (action === 'edit') openForm(id);
-    if (action === 'delete') askDelete(id);
+    if (action === 'delete') moveToTrash(id);
+    if (action === 'restore') restoreNote(id);
+    if (action === 'delete-perm') askDelete(id, true);
     return;
   }
   openView(id);
@@ -272,6 +324,28 @@ function openView(id) {
   els.viewTitle.textContent = note.title;
   els.viewContent.innerHTML = note.content;
   els.viewWordStats.textContent = note.content.length + ' символів';
+
+  if (note.deleted) {
+    els.viewPaneFooter.innerHTML = `
+      <button type="button" class="btn btn-outline-success me-auto" id="viewRestoreBtn">
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Відновити
+      </button>
+      <button type="button" class="btn btn-outline-danger" id="viewPermDeleteBtn">
+        <i class="bi bi-x-circle me-1"></i>Видалити назавжди
+      </button>
+      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Закрити</button>
+    `;
+    document.getElementById('viewRestoreBtn').onclick = () => { restoreNote(id); noteModal.hide(); };
+    document.getElementById('viewPermDeleteBtn').onclick = () => { noteModal.hide(); askDelete(id, true); };
+  } else {
+    els.viewPaneFooter.innerHTML = `
+      <button type="button" class="btn btn-outline-danger me-auto" id="viewDeleteBtn"><i class="bi bi-trash3 me-1"></i>В кошик</button>
+      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Закрити</button>
+      <button type="button" class="btn btn-kb" id="viewEditBtn"><i class="bi bi-pencil-square me-1"></i>Редагувати</button>
+    `;
+    document.getElementById('viewDeleteBtn').onclick = () => { moveToTrash(id); noteModal.hide(); };
+    document.getElementById('viewEditBtn').onclick = () => { openForm(id); };
+  }
 
   els.viewPane.classList.remove('d-none');
   els.form.classList.add('d-none');
@@ -299,15 +373,44 @@ function openForm(id = null) {
   noteModal.show();
 }
 
-function askDelete(id) {
+function moveToTrash(id) {
+  const note = findNote(id);
+  if (note) {
+    note.deleted = true;
+    saveNotes();
+    renderAll();
+    showToast('Переміщено в кошик', 'bi-trash text-warning');
+  }
+}
+
+function restoreNote(id) {
+  const note = findNote(id);
+  if (note) {
+    note.deleted = false;
+    saveNotes();
+    renderAll();
+    showToast('Нотатку відновлено', 'bi-arrow-counterclockwise text-success');
+  }
+}
+
+function askDelete(id, permanent = false) {
   state.pendingDeleteId = id;
+  state.permanentDelete = permanent;
+  els.confirmTitle.textContent = permanent ? 'Видалити назавжди?' : 'Видалити нотатку?';
+  els.confirmSub.textContent = permanent ? 'Відновити цю нотатку буде неможливо.' : 'Вона переміститься у кошик.';
   confirmModal.show();
 }
 
 els.confirmDeleteBtn.addEventListener('click', () => {
-  state.notes = state.notes.filter(n => n.id !== state.pendingDeleteId);
-  saveNotes(); confirmModal.hide(); renderAll();
-  showToast('Нотатку видалено');
+  if (state.permanentDelete) {
+    state.notes = state.notes.filter(n => n.id !== state.pendingDeleteId);
+    showToast('Нотатку видалено остаточно', 'bi-x-circle text-danger');
+  } else {
+    moveToTrash(state.pendingDeleteId);
+  }
+  saveNotes();
+  confirmModal.hide();
+  renderAll();
 });
 
 els.form.addEventListener('submit', (e) => {
@@ -318,7 +421,8 @@ els.form.addEventListener('submit', (e) => {
     content: els.noteContent.value,
     tags: parseTags(els.noteTags.value),
     favorite: els.noteFav.checked,
-    pinned: els.notePinned.checked
+    pinned: els.notePinned.checked,
+    deleted: false
   };
   if (els.noteId.value) {
     Object.assign(findNote(els.noteId.value), data);
@@ -329,6 +433,36 @@ els.form.addEventListener('submit', (e) => {
   showToast('Збережено');
 });
 
+els.exportBtn.addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(state.notes, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `mintbrain_notes_${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+});
+
+els.importBtn.addEventListener('click', () => els.importFile.click());
+
+els.importFile.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (evt) => {
+    try {
+      const data = JSON.parse(evt.target.result);
+      if (Array.isArray(data)) {
+        state.notes = data.map(n => ({ ...n, deleted: !!n.deleted }));
+        saveNotes();
+        renderAll();
+        showToast('Імпорт успішний!');
+      }
+    } catch (err) {
+      showToast('Помилка файлу імпорту', 'bi-exclamation-octagon text-danger');
+    }
+  };
+  reader.readAsText(file);
+});
+
 function init() {
   $('#year').textContent = new Date().getFullYear();
   initTheme();
@@ -337,3 +471,4 @@ function init() {
 }
 
 init();
+ 
