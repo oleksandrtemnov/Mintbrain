@@ -2,7 +2,30 @@
 
 const STORAGE_KEY = 'mintbrain_hierarchy_v1';
 const THEME_KEY = 'kb_theme';
+const ALLOWED_TAGS = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'DEL', 'UL', 'OL', 'LI', 'BR', 'P', 'DIV', 'SPAN', 'MARK', 'CODE', 'PRE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'A']);
 
+function sanitizeHTML(dirtyHtml) {
+  if (!dirtyHtml) return '';
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(String(dirtyHtml), 'text/html');
+  const walk = (node) => {
+    Array.from(node.children).forEach((child) => {
+      if (!ALLOWED_TAGS.has(child.tagName)) {
+        child.replaceWith(...child.childNodes);
+      } else {
+        Array.from(child.attributes).forEach((attr) => {
+          const name = attr.name.toLowerCase();
+          if (name.startsWith('on') || (name === 'href' && attr.value.trim().toLowerCase().startsWith('javascript:'))) {
+            child.removeAttribute(attr.name);
+          }
+        });
+        walk(child);
+      }
+    });
+  };
+  walk(doc.body);
+  return doc.body.innerHTML;
+}
 const state = {
   notes: [],
   folder: 'Усі',
@@ -322,7 +345,7 @@ function openView(id) {
   els.viewFolder.innerHTML = '<i class="bi bi-folder me-1"></i>' + escapeHtml(note.folder);
   els.viewDate.textContent = formatDate(note.createdAt);
   els.viewTitle.textContent = note.title;
-  els.viewContent.innerHTML = note.content;
+  els.viewContent.innerHTML = sanitizeHTML(note.content);
   els.viewWordStats.textContent = note.content.length + ' символів';
 
   if (note.deleted) {
@@ -471,4 +494,12 @@ function init() {
 }
 
 init();
+
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyK') {
+    e.preventDefault();
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) searchInput.focus();
+  }
+});
  
