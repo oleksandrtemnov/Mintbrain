@@ -498,8 +498,9 @@ init();
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.code === 'KeyK') {
     e.preventDefault();
-    const searchInput = document.getElementById('searchInput');
-    if (searchInput) searchInput.focus();
+    e.stopPropagation();
+    const input = document.getElementById('searchInput') || document.querySelector('input[type="search"], input[placeholder*="Пошук"]');
+    if (input) input.focus();
   }
-});
+}, true);
  
